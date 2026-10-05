@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-# Regenerate titan/serials-boxarts.json — the GameID (serial) -> boxart
-# filename mapping the TITAN device fetches Mega-CD / Sega CD art through —
-# and titan/names-boxarts.json, the same join keyed by Redump full name (for
-# compressed .chd images, whose header the device can't read). Text-name
+# Regenerate titan/serials-boxarts.json — the GameID -> boxart filename
+# mapping the TITAN device fetches Mega-CD / Sega CD art through. Two key
+# kinds share the file:
+#   - a Redump serial, spaces removed, uppercased ("T-93175"). The device
+#     reads the serial from the disc header (GM T-93175 -00) and tries a fixed
+#     list of forms against these keys (header revisions/regions differ from
+#     Redump's: "T-93185-00" on a disc Redump lists as "T-93185-50");
+#   - "name-%08x": zlib crc32 of the Redump full name, for images whose
+#     header the device can't read (.chd, which it would have to decompress)
+#     — their file name, minus the extension, is hashed and looked up.
+# Text-name
 # matching on-device fails (thumbnail names drift across Redump revisions);
 # this join runs OFFLINE where its output is auditable, and the device does
 # exact dictionary lookups only. The same filename serves Named_Snaps and
@@ -27,10 +34,10 @@
 # so every mapped name is resolved here to the real file it points to.
 #
 # Usage:  python3 titan/generate-mapping.py   (from the repo root; needs
-# network; overwrites both JSON files). Run after every upstream
+# network; overwrites titan/serials-boxarts.json). Run after every upstream
 # thumbnails sync. The generator preserves nothing: fold manual fixes into
 # MANUAL_EXTRA below.
-import json, re, subprocess, urllib.request, os, sys
+import json, re, subprocess, urllib.request, os, sys, zlib
 
 RAW = "https://raw.githubusercontent.com/libretro/libretro-database/master/metadat"
 DAT_REDUMP = f"{RAW}/redump/Sega%20-%20Mega-CD%20-%20Sega%20CD.dat"
@@ -150,17 +157,18 @@ def main():
     for name, serials in releases:
         if name in by_name:
             for x in serials:
-                mapping.setdefault(x, by_name[name])
+                mapping.setdefault(x.replace(' ', '').upper(), by_name[name])
+    for name, f in by_name.items():
+        mapping['name-%08x' % (zlib.crc32(name.encode('utf-8')) & 0xffffffff)] = f
     mapping.update(MANUAL_EXTRA)
 
     json.dump(mapping, open(os.path.join(root, 'titan', 'serials-boxarts.json'), 'w'),
               indent=1, sort_keys=True)
-    json.dump(by_name, open(os.path.join(root, 'titan', 'names-boxarts.json'), 'w'),
-              indent=1, sort_keys=True)
     serials = {x for _, ss in releases for x in ss}
     print(f"releases: {len(releases)}  mapped: {len(by_name)} ({by_subset} by region subset)  "
           f"ambiguous skipped: {len(ambiguous)}")
-    print(f"serials: {len(serials)}  mapped: {len(mapping)}")
+    print(f"serials: {len(serials)}  mapped: {sum(not k.startswith('name-') for k in mapping)}  "
+          f"name keys: {sum(k.startswith('name-') for k in mapping)}")
     print(f"art files reached: {len(set(by_name.values()))} of {len(files)}")
     print(f"symlinks resolved: {resolved}  dangling dropped: {len(dangling)}")
     for n in ambiguous:
